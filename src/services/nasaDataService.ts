@@ -113,14 +113,40 @@ function saveToCache<T>(key: string, data: T) {
 }
 
 /**
+ * API requests should always return JSON. If a deployment rewrites a missing
+ * API route to the SPA entry point, the response is HTML ("<!doctype ..."),
+ * which used to surface as an unhelpful JSON parsing exception.
+ */
+async function readApiJson<T>(res: Response, endpoint: string): Promise<T> {
+  const contentType = res.headers.get('content-type') || '';
+  const body = await res.text();
+
+  if (!res.ok) {
+    throw new Error(`${endpoint} failed: HTTP ${res.status}${body ? ` — ${body.slice(0, 240)}` : ''}`);
+  }
+
+  if (!contentType.toLowerCase().includes('application/json')) {
+    const isHtml = /^\s*<!doctype html|^\s*<html/i.test(body);
+    throw new Error(
+      isHtml
+        ? `${endpoint} returned the website HTML instead of JSON. The API route is not deployed or is being rewritten to index.html.`
+        : `${endpoint} returned an unexpected ${contentType || 'response'} instead of JSON.`
+    );
+  }
+
+  try {
+    return JSON.parse(body) as T;
+  } catch {
+    throw new Error(`${endpoint} returned malformed JSON.`);
+  }
+}
+
+/**
  * Check and synchronize latest NASA Mars rover observations
  */
 export async function syncLatestObservation(mission: 'mars2020' | 'msl' = 'mars2020'): Promise<SyncLatestResult> {
   const res = await fetch(`/api/nasa/sync/latest?mission=${mission}`);
-  if (!res.ok) {
-    throw new Error(`Failed to check latest NASA observations: HTTP ${res.status}`);
-  }
-  return await res.json();
+  return readApiJson<SyncLatestResult>(res, 'NASA latest-observation API');
 }
 
 /**
@@ -163,10 +189,7 @@ export async function fetchMarsRawImages(params: FetchRawImagesParams = {}): Pro
 
   try {
     const res = await fetch(`/api/nasa/mars2020/raw?${queryParams.toString()}`, { signal });
-    if (!res.ok) {
-      throw new Error(`Failed to fetch Mars raw images: HTTP ${res.status}`);
-    }
-    const data = await res.json();
+    const data = await readApiJson<any>(res, 'NASA raw-images API');
     saveToCache(cacheKey, data);
     return data;
   } catch (err: any) {
@@ -191,10 +214,7 @@ export async function fetchHiRISEProducts(query?: string): Promise<{
   if (cached) return cached;
 
   const res = await fetch(`/api/nasa/hirise/products${query ? `?q=${encodeURIComponent(query)}` : ''}`);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch HiRISE products: HTTP ${res.status}`);
-  }
-  const data = await res.json();
+  const data = await readApiJson<{ products: HiRISEProduct[]; retrievedAt: string }>(res, 'NASA HiRISE API');
   saveToCache(cacheKey, data);
   return data;
 }
@@ -209,10 +229,7 @@ export async function fetchSourcesHealth(): Promise<{
 }> {
   try {
     const res = await fetch('/api/sources/health');
-    if (!res.ok) {
-      throw new Error(`Health check failed with status ${res.status}`);
-    }
-    return await res.json();
+    return await readApiJson<{ sources: DataSourceHealth[]; overallStatus: 'connected' | 'degraded' | 'offline'; timestamp: string }>(res, 'NASA source-health API');
   } catch (err: any) {
     return {
       sources: [
