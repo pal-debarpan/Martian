@@ -1,0 +1,5 @@
+// Vercel Function for GET /api/nasa/hirise/products
+import app from '../../../server';
+
+export const config = { maxDuration: 30 };
+export default app;
